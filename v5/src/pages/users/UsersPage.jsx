@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import bcrypt from "bcryptjs";
 import {
   Search,
   Plus,
@@ -9,7 +10,7 @@ import {
   RefreshCw,
   AlertCircle,
 } from "lucide-react";
-import { callDepartmentFlow, callUserFlow, callLocationFlow, callDesignationFlow, callRoleFlow, callUserRolesFlow, checkReferences } from "../../api/flows";
+import { callDepartmentFlow, callUserFlow, callLocationFlow, callDesignationFlow, callRoleFlow, callUserRolesFlow, callAuthFlow, checkReferences } from "../../api/flows";
 import { StatusBadge } from "../../components/common/StatusBadge";
 import { COLORS, cardStyle } from "../../constants/theme";
 import { UserPanel } from "./UserPanel";
@@ -17,7 +18,13 @@ import { logAudit } from "../../utils/audit";
 import { activeRoleIdsFor, syncUserRoles } from "../../utils/permissions";
 import { usePermissions } from "../../context/PermissionContext";
 
-const EMPTY_FORM = { guid: "", empId: "", firstName: "", lastName: "", jobTitle: "", departmentId: "", email: "", reportingManagerId: "", locationId: "", roleIds: [], active: true };
+const EMPTY_FORM = { guid: "", empId: "", firstName: "", lastName: "", jobTitle: "", departmentId: "", email: "", reportingManagerId: "", locationId: "", roleIds: [], active: true, username: "", password: "" };
+
+// Same base64-of-bcrypt wire format SignUpPage used to send — the
+// GET_CREDENTIAL/CREATE_CREDENTIAL flow actions are unchanged, only who
+// calls them moved from the self-service sign-up form to this admin screen.
+const asciiToBase64 = (str) => btoa(str);
+const USERNAME_RE = /^[A-Za-z0-9._@-]{3,50}$/;
 
 export function UsersPage() {
   const [rows, setRows] = useState([]);
@@ -86,7 +93,7 @@ export function UsersPage() {
     { label: "Inactive Users", value: String(rows.length - activeCount), icon: AlertCircle, color: COLORS.danger },
   ];
 
-  const submitPanel = (form) => {
+  const submitPanel = async (form) => {
     if (!form.empId?.trim() || !form.firstName?.trim() || !form.lastName?.trim()) {
       setErr("Emp ID, First Name and Last Name are required.");
       return;
@@ -106,28 +113,84 @@ export function UsersPage() {
         return;
       }
     }
+
+    const isAdd = !form.guid;
+    const username = (form.username || "").trim();
+    const password = form.password || "";
+    // Login is only created on Add — an existing employee's credential isn't
+    // touched from here, same as before (Forgot Password is how it changes).
+    if (isAdd) {
+      if (!username || !password) {
+        setErr("Username and Initial Password are required to create the login.");
+        return;
+      }
+      if (!USERNAME_RE.test(username)) {
+        setErr("Username must be 3-50 characters: letters, numbers, dot, dash, underscore or @.");
+        return;
+      }
+      if (password.length < 8) {
+        setErr("Initial Password must be at least 8 characters.");
+        return;
+      }
+    }
+
     setSaving(true);
     setErr("");
-    const action = form.guid ? "EDIT" : "CREATE";
+
+    if (isAdd) {
+      try {
+        const existing = await callAuthFlow("GET_CREDENTIAL", { username });
+        const exRow = Array.isArray(existing) ? existing[0] : existing;
+        if (exRow && exRow.passwordHashB64) {
+          setSaving(false);
+          setErr("That username is already taken. Choose another.");
+          return;
+        }
+      } catch {
+        // GET_CREDENTIAL failing here just means we couldn't pre-check —
+        // CREATE_CREDENTIAL below still fails safely if it really is a duplicate.
+      }
+    }
+
+    const action = isAdd ? "CREATE" : "EDIT";
     let userSaved = false;
+    let createdGuid = "";
     callUserFlow(action, form)
       .then((res) => {
         setRows(res.data);
         userSaved = true;
         // A new employee's id only exists after the insert — find it by Emp ID.
-        const userId = form.guid || (res.data || []).find((r) => (r.empId || "").trim().toLowerCase() === form.empId.trim().toLowerCase())?.guid;
+        const userRow = isAdd
+          ? (res.data || []).find((r) => (r.empId || "").trim().toLowerCase() === form.empId.trim().toLowerCase())
+          : (res.data || []).find((r) => String(r.guid) === String(form.guid));
+        const userId = form.guid || userRow?.guid;
         if (!userId) throw new Error("User saved, but the new record couldn't be found to assign roles. Open it and set the role again.");
-        return syncUserRoles(userId, form.roleIds || []);
+        createdGuid = isAdd ? userId : "";
+        const rolesDone = syncUserRoles(userId, form.roleIds || []);
+        if (!isAdd) return rolesDone;
+        // Create the login right after the employee row, same as sign-up used to.
+        return rolesDone.then(() => callAuthFlow("CREATE_CREDENTIAL", {
+          userId: userRow.id ?? userId,
+          username,
+          passwordHashB64: asciiToBase64(bcrypt.hashSync(password, 10)),
+        }));
       })
       .then(() => loadUserRoles())
       .then(() => {
         setSaving(false);
         setPanel(null);
-        logAudit("User", form.guid ? "Update" : "Create", `${form.firstName || ""} ${form.lastName || ""}`.trim() || form.empId || "record");
-        setToast(form.guid ? "User updated." : "User added.");
+        logAudit("User", isAdd ? "Create" : "Update", `${form.firstName || ""} ${form.lastName || ""}`.trim() || form.empId || "record");
+        setToast(isAdd ? "User added. Share the username and initial password with them." : "User updated.");
         refreshMyPermissions(); // in case the admin just changed their own role
       })
       .catch((e) => {
+        // Don't leave an orphan employee row behind if the login couldn't be created.
+        if (isAdd && createdGuid) {
+          callUserFlow("DELETE", { guid: createdGuid }).catch(() => {});
+          setSaving(false);
+          setErr(`Login couldn't be created (${e.message}) — the new employee record was rolled back. Try again.`);
+          return;
+        }
         setSaving(false);
         setErr(userSaved ? `User saved, but roles could not be updated: ${e.message}` : e.message);
         if (userSaved) loadUserRoles();
