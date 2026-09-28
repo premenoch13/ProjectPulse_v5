@@ -14,68 +14,19 @@ import { callAuthFlow, callUserFlow } from "../../api/flows";
 // and depending on how the flow builds the response (and how the row was written)
 // it can be wrapped once, twice or not at all. Unwrap until it's the real bcrypt
 // text ("$2a$10$..."), so sign-in works whichever way the flow returns it.
-/* ============================================================
-   RECOVERING THE BCRYPT HASH FROM WHAT THE FLOW RETURNS
-
-   The stored value goes through a lossy-looking but reversible chain,
-   because the flow writes BINARY (base64ToBinary) into a column that is
-   nvarchar(512):
-
-     1. the app sends base64(hash)
-     2. base64ToBinary turns that into the hash's 60 ASCII bytes
-     3. those bytes land in an nvarchar column, so SQL reads each PAIR of
-        bytes as one UTF-16 character -> 30 CJK-looking glyphs
-     4. on read, the flow's base64() encodes that string as UTF-8 (3 bytes
-        per glyph) and base64s it
-
-   So recovery is: atob -> decode UTF-8 -> split each UTF-16 code unit back
-   into its two bytes. The UTF-8 step is easy to miss and nothing works
-   without it.
-
-   Rather than hard-code that exact order, we try every combination of the
-   three reversals and accept whichever produces something bcrypt-shaped —
-   "$2a$10$" is an unambiguous marker. That also covers rows written when
-   the column or flow was configured differently, so old and new accounts
-   both sign in.
-   ============================================================ */
-const BCRYPT_RE = /^\$2[abxy]\$\d{2}\$/;
-
-const unBase64 = (s) => atob(s);
-const unUtf8 = (s) => new TextDecoder("utf-8", { fatal: true }).decode(Uint8Array.from(s, (c) => c.charCodeAt(0)));
-function unWiden(s) {
-  let out = "";
-  for (let i = 0; i < s.length; i++) {
-    const c = s.charCodeAt(i);
-    if (c > 0xffff) return s; // astral char — not a byte pair
-    out += String.fromCharCode(c & 0xff, (c >> 8) & 0xff);
-  }
-  return out.replace(/\0+$/, "");
-}
-
 function decodeHash(value) {
-  const first = String(value || "").trim();
-  if (!first) return "";
-  const seen = new Set();
-  let level = [first];
-  for (let depth = 0; depth < 5 && level.length; depth++) {
-    const next = [];
-    for (const s of level) {
-      if (!s || seen.has(s)) continue;
-      seen.add(s);
-      if (BCRYPT_RE.test(s)) return s;
-      for (const step of [unBase64, unUtf8, unWiden]) {
-        try {
-          const out = step(s);
-          if (out && out !== s) next.push(out);
-        } catch { /* this reversal doesn't apply here */ }
-      }
-    }
-    level = next;
+  let s = String(value || "").trim();
+  for (let i = 0; i < 4; i++) {
+    if (/^\$2[abxy]\$\d{2}\$/.test(s)) return s;
+    try { s = atob(s); } catch { return ""; }
   }
-  return "";
+  return /^\$2[abxy]\$\d{2}\$/.test(s) ? s : "";
 }
 
-export function SignInPage({ onLogin, onGoToSignUp, onGoToForgotPassword }) {
+// "Create an account" is gone — accounts are created by an admin from
+// Admin -> Employee Details (username + an initial password set there),
+// and a user who forgets that password uses "Forgot password" below.
+export function SignInPage({ onLogin, onGoToForgotPassword }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -174,12 +125,9 @@ export function SignInPage({ onLogin, onGoToSignUp, onGoToForgotPassword }) {
               {busy ? "Signing in…" : "Sign in"}
             </button>
 
-            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 16, fontSize: 12.5 }}>
+            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 16, fontSize: 12.5 }}>
               <button type="button" onClick={onGoToForgotPassword} style={{ background: "none", border: "none", color: COLORS.accent, cursor: "pointer", fontWeight: 600, padding: 0 }}>
                 Forgot password?
-              </button>
-              <button type="button" onClick={onGoToSignUp} style={{ background: "none", border: "none", color: COLORS.textMuted, cursor: "pointer", fontWeight: 600, padding: 0 }}>
-                Create an account
               </button>
             </div>
           </div>
