@@ -8,10 +8,8 @@ import { MODULES } from "../../constants/modules";
 import { invalidateFlowCache, warmFlowCache, callUserFlow } from "../../api/flows";
 import { COLORS } from "../../constants/theme";
 import { SignInPage } from "../../pages/auth/SignInPage";
-import { SignUpPage } from "../../pages/auth/SignUpPage";
 import { ForgotPasswordPage } from "../../pages/auth/ForgotPasswordPage";
 import { PermissionProvider, usePermissions } from "../../context/PermissionContext";
-import { VisibilityProvider } from "../../context/VisibilityContext";
 import { ApprovalStatusPage } from "../../pages/approval-status/ApprovalStatusPage";
 import { AuditLogPage } from "../../pages/audit-log/AuditLogPage";
 import { BillingPage } from "../../pages/billing/BillingPage";
@@ -191,7 +189,7 @@ export function ProjectPulseApp() {
     if (!s || typeof s !== "object" || !s.loginTime) return null;
     return Date.now() - s.loginTime < SESSION_DURATION ? s : null;
   });
-  const [authView, setAuthView] = useState("signin"); // "signin" | "signup" | "forgot"
+  const [authView, setAuthView] = useState("signin"); // "signin" | "forgot"
 
   const handleLogin = ({ userId, username, empId }) => {
     const s = setSession({ userId, username, empId });
@@ -206,12 +204,13 @@ export function ProjectPulseApp() {
   };
 
   if (!session) {
-    if (authView === "signup") return <SignUpPage onGoToSignIn={() => setAuthView("signin")} />;
+    // Sign-up is gone — accounts are created by an admin under Admin ->
+    // Employee Details, with an initial password set there. authView can
+    // still be "forgot" (Forgot Password keeps working the same way).
     if (authView === "forgot") return <ForgotPasswordPage onGoToSignIn={() => setAuthView("signin")} />;
     return (
       <SignInPage
         onLogin={handleLogin}
-        onGoToSignUp={() => setAuthView("signup")}
         onGoToForgotPassword={() => setAuthView("forgot")}
       />
     );
@@ -219,11 +218,7 @@ export function ProjectPulseApp() {
 
   return (
     <PermissionProvider userId={session.userId} username={session.username}>
-      {/* Inside PermissionProvider — project visibility is derived from the
-          signed-in user's id and admin flag (see context/VisibilityContext). */}
-      <VisibilityProvider>
-        <AuthenticatedShell session={session} onLogout={handleLogout} />
-      </VisibilityProvider>
+      <AuthenticatedShell session={session} onLogout={handleLogout} />
     </PermissionProvider>
   );
 }
