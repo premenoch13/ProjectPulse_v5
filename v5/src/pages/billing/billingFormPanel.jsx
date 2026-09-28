@@ -7,8 +7,18 @@ import {
   UploadCloud,
   Trash2,
   FileText,
+  Receipt,
+  Users,
+  Paperclip,
+  MessageSquare,
+  Info,
+  Building2,
+  FolderKanban,
+  CalendarClock,
+  Coins,
+  Clock,
 } from "lucide-react";
-import { COLORS, inputStyle, labelStyle } from "../../constants/theme";
+import { COLORS, SHADOWS, inputStyle, labelStyle } from "../../constants/theme";
 import { callProjectResourceFlow, callDesignationFlow, callProjectDocumentFlow } from "../../api/flows";
 import { getCurrentUserId } from "../../utils/session";
 import { activeOptions } from "../../utils/validation";
@@ -24,11 +34,43 @@ const timesheetDocName = (userId, periodId) => `Timesheet_${userId}_${periodId |
 // one code path, per FSD 4.6 (both T&M and Fixed Bid billing types) —
 // the split was the likely source of the submit error, since Add always
 // opened the T&M-only panel first and silently swapped components under
-// the same form state. Layout follows the exact convention ProjectPanel
-// already uses for its full-screen Add/Edit: "pp-project-page" shell +
-// "pp-form-grid" (auto-fit 200px columns -> 3-4 per row on a normal
-// screen) instead of a narrow centered column.
+// the same form state.
+//
+// Layout: same "Section card + right-hand Summary" convention as Link
+// Invoice's panel (see LinkInvoicePanel.jsx), adopted here for a consistent
+// look across Finance's Add/Edit screens. None of the form logic below —
+// resource loading, timesheet/document uploads, duplicate-period guard —
+// changed, only how it's laid out.
 const MAX_FILE_BYTES = 4 * 1024 * 1024;
+
+const card = { background: COLORS.card, border: `1px solid ${COLORS.border}`, borderRadius: 14, boxShadow: SHADOWS.sm };
+const grid = { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(230px, 1fr))", gap: "16px 18px" };
+const full = { gridColumn: "1 / -1" };
+
+function Section({ icon: Icon, color, title, sub, children }) {
+  return (
+    <div style={{ ...card, padding: 22 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 18 }}>
+        <span style={{ width: 36, height: 36, borderRadius: 10, background: `${color}18`, color, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Icon size={18} /></span>
+        <div>
+          <div style={{ fontWeight: 700, fontSize: 15, color: COLORS.text }}>{title}</div>
+          <div style={{ fontSize: 12, color: COLORS.textMuted }}>{sub}</div>
+        </div>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function Stat({ icon: Icon, label, value, color }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 14px", background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10 }}>
+      <Icon size={16} color={color || COLORS.accent} style={{ flexShrink: 0 }} />
+      <div style={{ flex: 1, fontSize: 12.5, color: COLORS.textMuted }}>{label}</div>
+      <div style={{ fontSize: 13, fontWeight: 700, color: color || COLORS.text, textAlign: "right", maxWidth: "60%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{value}</div>
+    </div>
+  );
+}
 
 export function BillingFormPanel({
   mode,
@@ -73,6 +115,7 @@ export function BillingFormPanel({
   const billingTypeName = (id) => billingTypes.find((b) => String(b.id ?? b.guid) === String(id))?.name || "";
   const currencyCode = (id) => currencies.find((c) => String(c.id ?? c.guid) === String(id))?.code || "";
   const period = billingPeriods.find((p) => String(p.id ?? p.guid) === String(form.billingPeriodId));
+  const status = approvalStatuses.find((s) => String(s.guid) === String(form.approvalStatusId));
 
   const typeName = project ? billingTypeName(project.billingTypeId) : billingTypeName(form.billingTypeId);
   const isTM = /time\s*&?\s*material|t\s*&\s*m/i.test(typeName);
@@ -214,165 +257,203 @@ export function BillingFormPanel({
     );
   };
 
+  const amount = Number(form.amount) || 0;
+  const code = project ? currencyCode(project.currencyId) : "";
+  const fmt = (n) => `${code} ${Number(n).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`.trim();
+
   return (
-    <div className="pp-project-page" style={{ flex: 1, background: COLORS.bg, display: "flex", flexDirection: "column", overflowY: "auto" }}>
-      <div style={{ padding: "22px 28px", borderBottom: `1px solid ${COLORS.border}`, display: "flex", justifyContent: "space-between", alignItems: "flex-start", background: COLORS.card }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-          <button onClick={onClose} title="Back to Billing" aria-label="Back to Billing" style={{ background: COLORS.bg, border: `1px solid ${COLORS.border}`, borderRadius: 8, width: 34, height: 34, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: COLORS.text }}>
-            <ArrowLeft size={16} />
-          </button>
-          <div>
-            <div style={{ fontWeight: 700, fontSize: 18, color: COLORS.text, fontFamily: "Sora, sans-serif" }}>
-              {mode === "add" ? "Submit Billing" : "Edit Billing"}{typeName ? ` — ${typeName}` : ""}
-            </div>
-            <div style={{ fontSize: 12, color: COLORS.accent, marginTop: 2 }}>
-              {isFixedBid ? "Milestone billing against the milestones defined on the project" : "Monthly billing from approved timesheets of billable resources"}
-            </div>
+    <div className="pp-project-page" data-access-skip style={{ flex: 1, background: COLORS.bg, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      <div style={{ padding: "18px 28px", borderBottom: `1px solid ${COLORS.border}`, display: "flex", alignItems: "center", gap: 14, background: COLORS.card }}>
+        <button onClick={onClose} title="Back to Billing" aria-label="Back to Billing" style={{ background: COLORS.bg, border: `1px solid ${COLORS.border}`, borderRadius: 8, width: 34, height: 34, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: COLORS.text }}>
+          <ArrowLeft size={16} />
+        </button>
+        <div>
+          <div style={{ fontWeight: 700, fontSize: 18, color: COLORS.text, fontFamily: "Sora, sans-serif" }}>
+            {mode === "add" ? "Submit Billing" : "Edit Billing"}{typeName ? ` — ${typeName}` : ""}
+          </div>
+          <div style={{ fontSize: 12, color: COLORS.accent, marginTop: 2 }}>
+            {isFixedBid ? "Milestone billing against the milestones defined on the project" : "Monthly billing from approved timesheets of billable resources"}
           </div>
         </div>
       </div>
 
-      <div style={{ padding: "24px 28px 40px", flex: 1, maxWidth: 860, width: "100%", margin: "0 auto" }}>
-        <SectionHeader n={1} label="Billing Details" />
-        <div className="pp-form-grid">
-          <div>
-            <label style={labelStyle}>Project*</label>
-            <select value={form.projectId || ""} onChange={(e) => onProjectChange(e.target.value)} style={inputStyle}>
-              <option value="">Select project</option>
-              {activeProjects.map((p) => <option key={p.guid ?? p.id} value={p.guid ?? p.id}>{p.projectCode} — {p.projectName}</option>)}
-            </select>
-            <div style={hint}>Only Active projects are listed</div>
-          </div>
-          <div>
-            <label style={labelStyle}>Customer</label>
-            <input value={client ? client.name : ""} disabled style={{ ...inputStyle, opacity: 0.7 }} placeholder="Auto" />
-          </div>
-          <div>
-            <label style={labelStyle}>Billing Type</label>
-            <input value={typeName || "—"} disabled style={{ ...inputStyle, opacity: 0.7 }} />
-            <div style={hint}>From project</div>
-          </div>
-          <div>
-            <label style={labelStyle}>Currency</label>
-            <input value={project ? currencyCode(project.currencyId) : ""} disabled style={{ ...inputStyle, opacity: 0.7 }} placeholder="Auto" />
-            <div style={hint}>From project</div>
-          </div>
-          <div>
-            <label style={labelStyle}>Billing Period*</label>
-            <select value={form.billingPeriodId || ""} onChange={(e) => setForm({ ...form, billingPeriodId: e.target.value })} style={inputStyle} disabled={!form.projectId}>
-              <option value="">Select period</option>
-              {activePeriods.map((p) => <option key={p.guid ?? p.id} value={p.guid ?? p.id}>{p.periodName}</option>)}
-            </select>
-            {duplicatePeriod ? (
-              <div style={{ ...hint, color: COLORS.danger, display: "flex", alignItems: "center", gap: 6 }}><AlertCircle size={12} /> Already billed for this period.</div>
-            ) : <div style={hint}>One billing per project + period</div>}
-          </div>
-          {isFixedBid && (
-            <div>
-              <label style={labelStyle}>Milestone Name{isFixedBid ? "*" : ""}</label>
-              <input value={form.milestoneName || ""} onChange={(e) => setForm({ ...form, milestoneName: e.target.value })} placeholder="e.g. M2 - UAT Sign-off" style={inputStyle} />
-              <div style={hint}>Fixed Bid only — matched against the project's milestone list by name</div>
-            </div>
-          )}
-          <div>
-            <label style={labelStyle}>Amount*</label>
-            <input type="number" min="0" step="0.01" value={form.amount || ""} onChange={(e) => setForm({ ...form, amount: e.target.value })} placeholder="e.g. 420000" style={inputStyle} />
-          </div>
-          <div>
-            <label style={labelStyle}>Submitted By</label>
-            <select value={form.submittedByUserId || ""} onChange={(e) => setForm({ ...form, submittedByUserId: e.target.value })} style={inputStyle}>
-              <option value="">{submittedByLabel()}</option>
-              {activeOptions(users, form.submittedByUserId).map((u) => <option key={u.id} value={u.id}>{u.firstName} {u.lastName}</option>)}
-            </select>
-          </div>
-          {mode === "edit" && (
-            <div>
-              <label style={labelStyle}>Approval Status</label>
-              <select value={form.approvalStatusId || ""} onChange={(e) => setForm({ ...form, approvalStatusId: e.target.value })} style={inputStyle}>
-                <option value="">Select status</option>
-                {activeOptions(approvalStatuses, form.approvalStatusId).map((s) => <option key={s.guid} value={s.guid}>{s.name}</option>)}
-              </select>
-            </div>
-          )}
-        </div>
+      <div style={{ flex: 1, overflowY: "auto", padding: "22px 28px" }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 20, alignItems: "flex-start" }}>
+          <div style={{ flex: "3 1 600px", minWidth: 0, display: "flex", flexDirection: "column", gap: 20 }}>
+            <Section icon={Receipt} color={COLORS.accent} title="Billing Details" sub="Project, period, amount and who's submitting it">
+              <div style={grid}>
+                <div>
+                  <label style={labelStyle}>Project*</label>
+                  <select value={form.projectId || ""} onChange={(e) => onProjectChange(e.target.value)} style={inputStyle}>
+                    <option value="">Select project</option>
+                    {activeProjects.map((p) => <option key={p.guid ?? p.id} value={p.guid ?? p.id}>{p.projectCode} — {p.projectName}</option>)}
+                  </select>
+                  <div style={hint}>Only Active projects are listed</div>
+                </div>
+                <div>
+                  <label style={labelStyle}>Customer</label>
+                  <input value={client ? client.name : ""} disabled style={{ ...inputStyle, opacity: 0.7 }} placeholder="Auto" />
+                </div>
+                <div>
+                  <label style={labelStyle}>Billing Type</label>
+                  <input value={typeName || "—"} disabled style={{ ...inputStyle, opacity: 0.7 }} />
+                  <div style={hint}>From project</div>
+                </div>
+                <div>
+                  <label style={labelStyle}>Currency</label>
+                  <input value={project ? currencyCode(project.currencyId) : ""} disabled style={{ ...inputStyle, opacity: 0.7 }} placeholder="Auto" />
+                  <div style={hint}>From project</div>
+                </div>
+                <div>
+                  <label style={labelStyle}>Billing Period*</label>
+                  <select value={form.billingPeriodId || ""} onChange={(e) => setForm({ ...form, billingPeriodId: e.target.value })} style={inputStyle} disabled={!form.projectId}>
+                    <option value="">Select period</option>
+                    {activePeriods.map((p) => <option key={p.guid ?? p.id} value={p.guid ?? p.id}>{p.periodName}</option>)}
+                  </select>
+                  {duplicatePeriod ? (
+                    <div style={{ ...hint, color: COLORS.danger, display: "flex", alignItems: "center", gap: 6 }}><AlertCircle size={12} /> Already billed for this period.</div>
+                  ) : <div style={hint}>One billing per project + period</div>}
+                </div>
+                {isFixedBid && (
+                  <div>
+                    <label style={labelStyle}>Milestone Name{isFixedBid ? "*" : ""}</label>
+                    <input value={form.milestoneName || ""} onChange={(e) => setForm({ ...form, milestoneName: e.target.value })} placeholder="e.g. M2 - UAT Sign-off" style={inputStyle} />
+                    <div style={hint}>Fixed Bid only — matched against the project's milestone list by name</div>
+                  </div>
+                )}
+                <div>
+                  <label style={labelStyle}>Amount*</label>
+                  <input type="number" min="0" step="0.01" value={form.amount || ""} onChange={(e) => setForm({ ...form, amount: e.target.value })} placeholder="e.g. 420000" style={inputStyle} />
+                </div>
+                <div>
+                  <label style={labelStyle}>Submitted By</label>
+                  <select value={form.submittedByUserId || ""} onChange={(e) => setForm({ ...form, submittedByUserId: e.target.value })} style={inputStyle}>
+                    <option value="">{submittedByLabel()}</option>
+                    {activeOptions(users, form.submittedByUserId).map((u) => <option key={u.id} value={u.id}>{u.firstName} {u.lastName}</option>)}
+                  </select>
+                </div>
+                {mode === "edit" && (
+                  <div>
+                    <label style={labelStyle}>Approval Status</label>
+                    <select value={form.approvalStatusId || ""} onChange={(e) => setForm({ ...form, approvalStatusId: e.target.value })} style={inputStyle}>
+                      <option value="">Select status</option>
+                      {activeOptions(approvalStatuses, form.approvalStatusId).map((s) => <option key={s.guid} value={s.guid}>{s.name}</option>)}
+                    </select>
+                  </div>
+                )}
+              </div>
+            </Section>
 
-        <SectionHeader n={2} label="Billable Resources" sub="Auto-loaded · billable only" />
-        <div className="pp-field-full" style={{ border: `1px solid ${COLORS.border}`, borderRadius: 10, overflow: "hidden" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
-            <thead>
-              <tr style={{ background: COLORS.bg }}>
-                {["Resource", "Designation", "Alloc %", "Billable Hours", "Approved Timesheet"].map((h) => (
-                  <th key={h} style={{ textAlign: "left", padding: "8px 10px", fontSize: 11, color: COLORS.textMuted, fontWeight: 700, textTransform: "uppercase" }}>{h}</th>
+            <Section icon={Users} color="#8B5CF6" title="Billable Resources" sub="Auto-loaded · billable only">
+              <div style={{ border: `1px solid ${COLORS.border}`, borderRadius: 10, overflow: "hidden" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+                  <thead>
+                    <tr style={{ background: COLORS.bg }}>
+                      {["Resource", "Designation", "Alloc %", "Billable Hours", "Approved Timesheet"].map((h) => (
+                        <th key={h} style={{ textAlign: "left", padding: "8px 10px", fontSize: 11, color: COLORS.textMuted, fontWeight: 700, textTransform: "uppercase" }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {!form.projectId ? (
+                      <tr><td colSpan={5} style={{ padding: 16, textAlign: "center", color: COLORS.textMuted }}>Select a project first.</td></tr>
+                    ) : loadingResources ? (
+                      <tr><td colSpan={5} style={{ padding: 16, textAlign: "center", color: COLORS.textMuted }}><Loader2 size={14} className="spin" style={{ verticalAlign: "middle", marginRight: 6 }} />Loading…</td></tr>
+                    ) : resourceRows.length === 0 ? (
+                      <tr><td colSpan={5} style={{ padding: 16, textAlign: "center", color: COLORS.textMuted }}>No billable resources allocated to this project.</td></tr>
+                    ) : resourceRows.map((r) => (
+                      <tr key={r.key} style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                        <td style={{ padding: "8px 10px", fontWeight: 600, color: COLORS.text }}>{r.name}</td>
+                        <td style={{ padding: "8px 10px", color: COLORS.text }}>{r.designation}</td>
+                        <td style={{ padding: "8px 10px", color: COLORS.text }}>{r.allocationPct}%</td>
+                        <td style={{ padding: "8px 10px", color: COLORS.text }}>{r.weeklyHours || 0} hrs</td>
+                        <td style={{ padding: "8px 10px" }}>
+                          {r.staged ? (
+                            <span style={{ display: "inline-flex", alignItems: "center", gap: 5, color: COLORS.accent, fontWeight: 600 }}><FileCheck size={12} /> {r.staged.fileName} <span style={{ color: COLORS.textMuted, fontWeight: 400 }}>(pending save)</span></span>
+                          ) : r.savedDoc ? (
+                            <span style={{ display: "inline-flex", alignItems: "center", gap: 5, color: COLORS.text }}><FileText size={12} /> {r.savedDoc.fileName || r.savedDoc.docName}</span>
+                          ) : (
+                            <label style={{ display: "inline-flex", alignItems: "center", gap: 5, cursor: "pointer", color: COLORS.accent, fontWeight: 600, fontSize: 12, border: `1px solid ${COLORS.border}`, borderRadius: 7, padding: "4px 9px" }}>
+                              <UploadCloud size={12} /> Upload timesheet
+                              <input type="file" style={{ display: "none" }} onChange={(e) => addTimesheetFile(r.userId, e.target.files)} />
+                            </label>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {resourceRows.length > 0 && (
+                  <div style={{ display: "flex", justifyContent: "flex-end", gap: 20, padding: "8px 12px", borderTop: `1px solid ${COLORS.border}`, background: COLORS.bg, fontSize: 12, color: COLORS.textMuted }}>
+                    <span>Billable resources <strong style={{ color: COLORS.text }}>{resourceRows.length}</strong></span>
+                    <span>Total Billable Hours <strong style={{ color: COLORS.text }}>{totalBillableHours.toFixed(1)}</strong></span>
+                  </div>
+                )}
+                {hoursError && <div style={{ ...hint, color: COLORS.danger, padding: "0 10px 8px" }}>{hoursError}</div>}
+              </div>
+            </Section>
+
+            <Section icon={Paperclip} color="#0EA5A4" title="Supporting Documents" sub="Optional — attached to the project's document list">
+              <div style={full}>
+                <label
+                  htmlFor="billing-doc-input"
+                  style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, border: `1.5px dashed ${COLORS.border}`, borderRadius: 10, padding: "18px 12px", cursor: "pointer", color: COLORS.textMuted, textAlign: "center" }}
+                >
+                  <UploadCloud size={20} />
+                  <span style={{ fontSize: 12.5 }}>Drop files or <span style={{ color: COLORS.accent, fontWeight: 600 }}>browse</span></span>
+                  <span style={{ fontSize: 11 }}>PDF, DOCX, XLSX, JPG, PNG</span>
+                  <input id="billing-doc-input" type="file" multiple onChange={(e) => addFiles(e.target.files)} style={{ display: "none" }} />
+                </label>
+                {docError && <div style={{ ...hint, color: COLORS.danger, marginTop: 6 }}>{docError}</div>}
+                {docs.map((d) => (
+                  <div key={d.fileName} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 8, padding: "8px 12px", background: COLORS.accentSoft, borderRadius: 8, fontSize: 12.5 }}>
+                    <span style={{ display: "flex", alignItems: "center", gap: 6, color: COLORS.accent, fontWeight: 600 }}><FileCheck size={13} /> {d.fileName} <span style={{ color: COLORS.textMuted, fontWeight: 400 }}>({d.sizeLabel})</span></span>
+                    <button type="button" onClick={() => removeDoc(d.fileName)} style={{ background: "none", border: "none", cursor: "pointer", color: COLORS.textMuted }}><Trash2 size={13} /></button>
+                  </div>
                 ))}
-              </tr>
-            </thead>
-            <tbody>
-              {!form.projectId ? (
-                <tr><td colSpan={5} style={{ padding: 16, textAlign: "center", color: COLORS.textMuted }}>Select a project first.</td></tr>
-              ) : loadingResources ? (
-                <tr><td colSpan={5} style={{ padding: 16, textAlign: "center", color: COLORS.textMuted }}><Loader2 size={14} className="spin" style={{ verticalAlign: "middle", marginRight: 6 }} />Loading…</td></tr>
-              ) : resourceRows.length === 0 ? (
-                <tr><td colSpan={5} style={{ padding: 16, textAlign: "center", color: COLORS.textMuted }}>No billable resources allocated to this project.</td></tr>
-              ) : resourceRows.map((r) => (
-                <tr key={r.key} style={{ borderTop: `1px solid ${COLORS.border}` }}>
-                  <td style={{ padding: "8px 10px", fontWeight: 600, color: COLORS.text }}>{r.name}</td>
-                  <td style={{ padding: "8px 10px", color: COLORS.text }}>{r.designation}</td>
-                  <td style={{ padding: "8px 10px", color: COLORS.text }}>{r.allocationPct}%</td>
-                  <td style={{ padding: "8px 10px", color: COLORS.text }}>{r.weeklyHours || 0} hrs</td>
-                  <td style={{ padding: "8px 10px" }}>
-                    {r.staged ? (
-                      <span style={{ display: "inline-flex", alignItems: "center", gap: 5, color: COLORS.accent, fontWeight: 600 }}><FileCheck size={12} /> {r.staged.fileName} <span style={{ color: COLORS.textMuted, fontWeight: 400 }}>(pending save)</span></span>
-                    ) : r.savedDoc ? (
-                      <span style={{ display: "inline-flex", alignItems: "center", gap: 5, color: COLORS.text }}><FileText size={12} /> {r.savedDoc.fileName || r.savedDoc.docName}</span>
-                    ) : (
-                      <label style={{ display: "inline-flex", alignItems: "center", gap: 5, cursor: "pointer", color: COLORS.accent, fontWeight: 600, fontSize: 12, border: `1px solid ${COLORS.border}`, borderRadius: 7, padding: "4px 9px" }}>
-                        <UploadCloud size={12} /> Upload timesheet
-                        <input type="file" style={{ display: "none" }} onChange={(e) => addTimesheetFile(r.userId, e.target.files)} />
-                      </label>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {resourceRows.length > 0 && (
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 20, padding: "8px 12px", borderTop: `1px solid ${COLORS.border}`, background: COLORS.bg, fontSize: 12, color: COLORS.textMuted }}>
-              <span>Billable resources <strong style={{ color: COLORS.text }}>{resourceRows.length}</strong></span>
-              <span>Total Billable Hours <strong style={{ color: COLORS.text }}>{totalBillableHours.toFixed(1)}</strong></span>
+              </div>
+            </Section>
+
+            <Section icon={MessageSquare} color="#F59E0B" title="Remarks" sub="Optional notes for Finance">
+              <div style={full}>
+                <textarea value={form.remarks || ""} onChange={(e) => setForm({ ...form, remarks: e.target.value })} rows={3} placeholder="Optional notes for Finance" style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }} />
+              </div>
+            </Section>
+
+            {error && <div style={{ display: "flex", gap: 8, alignItems: "center", color: COLORS.danger, fontSize: 13, padding: "12px 14px", background: COLORS.dangerSoft, borderRadius: 10 }}><AlertCircle size={15} /> {error}</div>}
+          </div>
+
+          <div style={{ flex: "1 1 300px", minWidth: 0, position: "sticky", top: 0 }}>
+            <div style={{ ...card, padding: 22, display: "flex", flexDirection: "column", gap: 12 }}>
+              <div style={{ fontWeight: 700, fontSize: 15, color: COLORS.text }}>Billing Summary</div>
+
+              <div style={{ padding: 16, borderRadius: 12, background: `linear-gradient(135deg, ${COLORS.navy}, ${COLORS.navyLift})`, color: "#fff" }}>
+                <div style={{ fontSize: 11.5, opacity: 0.7, letterSpacing: "0.04em" }}>{project ? (project.projectCode || project.projectName) : "PROJECT"}</div>
+                <div style={{ fontSize: 24, fontWeight: 800, marginTop: 8 }}>{amount ? fmt(amount) : "—"}</div>
+                <div style={{ fontSize: 11.5, opacity: 0.7 }}>Billing amount</div>
+                <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 11.5, fontWeight: 600, padding: "4px 10px", borderRadius: 999, background: "rgba(255,255,255,.12)" }}>{status?.name || "Draft"}</span>
+                  {typeName && <span style={{ fontSize: 11.5, fontWeight: 600, padding: "4px 10px", borderRadius: 999, background: "rgba(255,255,255,.12)" }}>{typeName}</span>}
+                </div>
+              </div>
+
+              <Stat icon={Building2} label="Customer" value={client?.name || "—"} />
+              <Stat icon={FolderKanban} label="Project" value={project ? (project.projectCode || project.projectName) : "—"} />
+              <Stat icon={CalendarClock} label="Billing Period" value={period ? period.periodName : "—"} color={duplicatePeriod ? COLORS.danger : undefined} />
+              <Stat icon={Users} label="Billable Resources" value={String(resourceRows.length)} />
+              <Stat icon={Clock} label="Total Billable Hours" value={`${totalBillableHours.toFixed(1)} h`} />
+              <Stat icon={Coins} label="Submitted By" value={submittedByLabel()} />
+
+              <div style={{ display: "flex", gap: 10, padding: "12px 14px", borderRadius: 10, background: COLORS.accentSoft, fontSize: 12, color: COLORS.textSoft, lineHeight: 1.5 }}>
+                <Info size={16} color={COLORS.accent} style={{ flexShrink: 0, marginTop: 1 }} />
+                Fields marked * are required. Billing Type, Customer and Currency come from the selected project.
+              </div>
             </div>
-          )}
-          {hoursError && <div style={{ ...hint, color: COLORS.danger, padding: "0 10px 8px" }}>{hoursError}</div>}
+          </div>
         </div>
-
-        <SectionHeader n={3} label="Supporting Documents" />
-        <div className="pp-field-full">
-          <label
-            htmlFor="billing-doc-input"
-            style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, border: `1.5px dashed ${COLORS.border}`, borderRadius: 10, padding: "18px 12px", cursor: "pointer", color: COLORS.textMuted, textAlign: "center" }}
-          >
-            <UploadCloud size={20} />
-            <span style={{ fontSize: 12.5 }}>Drop files or <span style={{ color: COLORS.accent, fontWeight: 600 }}>browse</span></span>
-            <span style={{ fontSize: 11 }}>PDF, DOCX, XLSX, JPG, PNG</span>
-            <input id="billing-doc-input" type="file" multiple onChange={(e) => addFiles(e.target.files)} style={{ display: "none" }} />
-          </label>
-          {docError && <div style={{ ...hint, color: COLORS.danger, marginTop: 6 }}>{docError}</div>}
-          {docs.map((d) => (
-            <div key={d.fileName} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 8, padding: "8px 12px", background: COLORS.accentSoft, borderRadius: 8, fontSize: 12.5 }}>
-              <span style={{ display: "flex", alignItems: "center", gap: 6, color: COLORS.accent, fontWeight: 600 }}><FileCheck size={13} /> {d.fileName} <span style={{ color: COLORS.textMuted, fontWeight: 400 }}>({d.sizeLabel})</span></span>
-              <button type="button" onClick={() => removeDoc(d.fileName)} style={{ background: "none", border: "none", cursor: "pointer", color: COLORS.textMuted }}><Trash2 size={13} /></button>
-            </div>
-          ))}
-        </div>
-
-        <SectionHeader n={4} label="Remarks" />
-        <div className="pp-field-full">
-          <textarea value={form.remarks || ""} onChange={(e) => setForm({ ...form, remarks: e.target.value })} rows={3} placeholder="Optional notes for Finance" style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }} />
-        </div>
-
-        {error && <div style={{ display: "flex", gap: 8, alignItems: "center", color: COLORS.danger, fontSize: 12.5, marginTop: 16 }}><AlertCircle size={14} /> {error}</div>}
       </div>
 
-      <div style={{ padding: "16px 28px", borderTop: `1px solid ${COLORS.border}`, background: COLORS.card, display: "flex", gap: 10, justifyContent: "flex-end", position: "sticky", bottom: 0 }}>
+      <div style={{ padding: "14px 28px", borderTop: `1px solid ${COLORS.border}`, background: COLORS.card, display: "flex", gap: 10, justifyContent: "flex-end" }}>
         <button onClick={onCancel} style={{ padding: "9px 16px", borderRadius: 8, border: `1px solid ${COLORS.border}`, background: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer", color: COLORS.text }}>Cancel</button>
         <button onClick={handleSubmit} disabled={saving || duplicatePeriod} style={{ padding: "9px 18px", borderRadius: 8, border: "none", background: COLORS.accent, color: "#fff", fontSize: 13, fontWeight: 700, cursor: (saving || duplicatePeriod) ? "default" : "pointer", opacity: (saving || duplicatePeriod) ? 0.6 : 1, display: "flex", alignItems: "center", gap: 7 }}>
           {saving && <Loader2 size={13} className="spin" />}
@@ -384,13 +465,3 @@ export function BillingFormPanel({
 }
 
 const hint = { fontSize: 11, color: COLORS.textMuted, marginTop: 4 };
-
-function SectionHeader({ n, label, sub }) {
-  return (
-    <div className="pp-field-full" style={{ display: "flex", alignItems: "baseline", gap: 8, marginTop: 22, marginBottom: 10 }}>
-      <span style={{ width: 18, height: 18, borderRadius: 5, background: COLORS.accentSoft, color: COLORS.accent, fontSize: 11, fontWeight: 700, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>{n}</span>
-      <span style={{ fontWeight: 700, fontSize: 13.5, color: COLORS.text }}>{label}</span>
-      {sub && <span style={{ fontSize: 11, color: COLORS.textMuted }}>· {sub}</span>}
-    </div>
-  );
-}
