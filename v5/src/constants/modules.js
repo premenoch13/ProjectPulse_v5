@@ -56,8 +56,12 @@ export const PROJECT_MODULES = [
 
 export const FINANCE_MODULES = [
   { key: "project-approval", label: "Project Approval", icon: FileCheck, color: "#3B6FE0", implemented: true },
-  { key: "billing", label: "Billing", icon: Landmark, color: "#8B5CF6", implemented: true },
-  { key: "billing-period", label: "Billing Periods", icon: CalendarClock, color: "#0EA5A4", implemented: true },
+  // Billing Periods is now a tab inside Billing (see BillingPage.jsx) rather
+  // than its own nav entry — same screen, same flow calls, just reached via
+  // the "Billing Periods" tab instead of a separate sidebar item. The
+  // "billing-period" page route in AppShell.jsx is left in place (harmless,
+  // unreferenced) in case anything still deep-links to it.
+  { key: "billing", label: "Timesheet Approval", icon: Landmark, color: "#8B5CF6", implemented: true },
   { key: "link-invoice", label: "Link Invoice", icon: Receipt, color: "#EAB308", implemented: true },
   // Timesheet Approval screen removed — timesheet hours now come from Billing
   // and are summarized in Report Analysis → Timesheet Summary.
