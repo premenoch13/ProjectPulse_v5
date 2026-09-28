@@ -47,6 +47,23 @@ export function UserPanel({ mode, data, departments, locations, designations, ro
         <label style={labelStyle}>Emp ID*</label>
         <input value={form.empId} onChange={(e) => setForm({ ...form, empId: e.target.value })} placeholder="e.g. EMP1001" disabled={restricted} style={{ ...inputStyle, ...lockedStyle }} />
 
+        {mode === "add" && (
+          <>
+            {/* Login is created together with the employee record now that
+                self-service sign-up is gone. The password set here is just
+                the initial one — the employee resets it themselves later
+                with "Forgot password" on the sign-in screen. */}
+            <label style={{ ...labelStyle, marginTop: 16 }}>Username*</label>
+            <input value={form.username || ""} onChange={(e) => setForm({ ...form, username: e.target.value })} placeholder="e.g. jane.doe" style={inputStyle} />
+
+            <label style={{ ...labelStyle, marginTop: 16 }}>Initial Password*</label>
+            <input type="password" value={form.password || ""} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="At least 8 characters" style={inputStyle} />
+            <div style={{ fontSize: 11.5, color: COLORS.textMuted, marginTop: 5 }}>
+              Share this with the employee — they can change it any time with "Forgot password" on the sign-in screen.
+            </div>
+          </>
+        )}
+
         <label style={{ ...labelStyle, marginTop: 16 }}>First Name*</label>
         <input value={form.firstName} onChange={(e) => setForm({ ...form, firstName: e.target.value })} placeholder="e.g. John" disabled={restricted} style={{ ...inputStyle, ...lockedStyle }} />
 
